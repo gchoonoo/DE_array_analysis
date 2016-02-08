@@ -4,12 +4,14 @@
 
 ##########################################################
 
+#setwd("/Users/choonoo/DE_array_analysis")
+
 ## Load libraries and functions for array processing and QA/QC plots
-source('DE_pathway_functions.R')
+source('functions.R')
 
 # save.image("~/de_test_v3.RData")
 
-# load("~/de_test_v3.RData")
+# load("./norm_exp.RData")
 
 ##########################################################
 
@@ -19,7 +21,7 @@ source('DE_pathway_functions.R')
 
 # save file where raw expression is saved
 
-file = "~/de_test_v2.RData"
+file = "./norm_exp.RData"
 
 load(file)
 
@@ -29,8 +31,8 @@ load(file)
 
 ##########################################################
 
-# normalize data and save
-norm.exprs = normalize_expression(raw.exprs=raw.exprs)
+# save normalized data
+output_normalized_expression(norm.exprs=norm.exprs)
 
 # feature filter
 norm.exprs.filter = filter_features(norm.exprs=norm.exprs)
@@ -55,8 +57,8 @@ path_results = pathway_analysis(norm.exprs.filter.category=norm.exprs.filter.cat
 head(path_results)
 
 # plots
-pathway_plots(path_results=path_results,parameter="OddsRatio",pvalue='raw')
+parameter='OddsRatio'
+pathway_plots(path_results=path_results,parameter=parameter,pvalue='raw')
 # pathway_plots(path_results=path_results,parameter="OddsRatio",pvalue='adjusted')
 # pathway_plots(path_results=path_results,parameter="generatio",pvalue='raw')
 # pathway_plots(path_results=path_results,parameter="generatio",pvalue='adjusted')
-
