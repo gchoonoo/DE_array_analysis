@@ -1,6 +1,6 @@
 ##########################################################
 
-# DE analysis functions
+# DE and Pathway Analysis Functions
 
 ##########################################################
 
@@ -15,7 +15,6 @@ require(oligo)
 require(pd.mogene.2.1.st)
 require(Heatplus)
 require(reshape2)
-require(ReportingTools)
 require(hwriter)
 require(ggplot2)
 require(limma)
@@ -24,17 +23,34 @@ require(XML)
 require(mogene21sttranscriptcluster.db)
 require(GOstats)
 require(genefilter)
-#require(dplyr)
 require(AnnotationDbi)
 
 ##########################################################
 
-# function definitions
+# Optional save norm expression
+# Input: 
+  # norm.exprs: normalized expression
+  # save.dir: path file to save data
+# Output: Saved normalized expression file
+output_normalized_expression = function(norm.exprs=norm.exprs, save.dir='.'){
+  
+  # save normalized expression to file
+  norm.exprs_file = exprs(norm.exprs)
+  
+  # insert folder location to save normalized expression
+  #reports.dir = "./"
+  
+  # save file
+  write.csv(file=file.path(save.dir,"normalized_expression.csv"), x=norm.exprs_file, quote=F)
+  
+  writeLines(paste0("Saving normalized expression to file: \n", file.path(save.dir,'normalized_expression.csv')))
+}
 
-##########################################################
-
-
-#from genefilter:::rowIQRs, just bringing it into this namespace
+# Filter expression IQRs, used within the filter_features function
+#from genefilter:::rowIQRs
+# Input: 
+  # eSet: Expression set
+# Output: Difference between 75th and 25th quantile for each probe
 rowIQRs <- function (eSet) 
 {
   numSamp <- ncol(eSet)
@@ -43,9 +59,42 @@ rowIQRs <- function (eSet)
   upQ - lowQ
 }
 
+# Filter probe features
+# Input:
+  # norm.exprs: normalized expression set
+  # save.dir: file path directory where to save probe mapping file
+# Output: filtered normalized expression set
+filter_features = function(norm.exprs=norm.exprs, save.dir='.'){
+  
+  # Map probe IDs to Entrez ID
+  suppressWarnings(probe.ents <- select(mogene21sttranscriptcluster.db, keys=featureNames(norm.exprs), columns=c("ENTREZID"), keytype="PROBEID"))
+  
+  # Filter NA
+  use.probe.ents <- probe.ents[!is.na(probe.ents$ENTREZID),]
+  
+  # Remove duplicated mappings
+  sub.eset <- norm.exprs[unique(use.probe.ents$PROBEID),]
+  
+  # Multiple probes per gene so this function finds all replicates and selects ones with largest value of the test statistic
+  unique.probes <- findLargest(featureNames(sub.eset), rowIQRs(sub.eset), 'mogene21sttranscriptcluster.db')
+  
+  # Code chunk to output mapping of entrez to probe used in de analysis if necessary
+  use.probe.ents[as.vector(unlist(sapply(unique.probes, function(x)which(x==use.probe.ents[,1])))),] -> probe_mapping
+  
+  
+  write.table(file=file.path(save.dir, "probe_mapping.txt"), probe_mapping, row.names=F, quote=F, sep="\t")
+  writeLines(paste0("Saving probe mapping to file: \n", file.path(save.dir,'probe_mapping.txt')))
+  
+  # Filter expression set to include unique probes
+  norm.exprs.filter <- sub.eset[unique.probes,]
+  
+  # return filered data
+  return(norm.exprs.filter)
+}
+
 #Computes differential expression between 2 specified categories
 #Input:
-#       use.exprs: ExpressionSet with a pData slot containing a data.frame with Mating, Timepoint, Inf_Status and optionally Tissue
+#       use.exprs: normalized expression
 #       contrast.correction: How to correct for multiple testing should be a valid value to provide to the limma::decideTests function
 #       category: column of pData to use for de analysis between categories        
 #Output:
@@ -88,47 +137,38 @@ de.analysis <- function(use.exprs, contrast.correction="separate", category="Cat
   
   unique.matings <- unique(contrasts)
   
-  res.list <- list(infecteds=decideTests(fit.2, method=contrast.correction), coefs=fit.2$coefficients)
+  de_results <- list(infecteds=decideTests(fit.2, method=contrast.correction), coefs=fit.2$coefficients)
   
-  res.list <- list(res.list)
+  de_results <- list(de_results)
   
-  names(res.list) <- colnames(fit.2$coefficients)
+  names(de_results) <- colnames(fit.2$coefficients)
   
-  #null.list <- sapply(res.list, is.null)
+  #null.list <- sapply(de_results, is.null)
   
-  return(list(results=res.list, fit=fit.2, cont.counts=cont.counts))
+  return(list(results=de_results, fit=fit.2, cont.counts=cont.counts))
 }
 
-#Summarizes the result from de.bycross.to.mock
+#Summarizes DE results
 #Input:
-#       res.list: A list as provided by the 'results' element of de.bycross.to.mock
-#       by: Whether or not to annotated the 'summary.dta' data.frame with gene symbols or probeset IDs.
-#       ...: Any filters to apply in the form: filter1=filter.vec, filter2=filter2.vec where filter.vec and filter2.vec are logical vectors named by probeset IDs.
-#           TRUE should indicate that the probeset should be removed and FALSE should indicate that the value should be kept.
-#           If not all the filters are FALSE for a given probeset, it will be removed from the 'summary.dta' element of the result, however it will only be flagged in the 'de.res' element.
+#       de_results: Results from the de.analysis function
+#       by: summarize with gene symbols or probeset IDs.
 #Output:
 #       A list containing the following elements:
-#           -de.res: A list named containing a data.frame containg the probeset, gene symbol, coeffecients (log2 scale) in the form: Inf_Timepoint.Inf_name.Mock_Timpoint.Mock_name.logFC
-#                    and whether or not the comparison was significant named as before but with .Signif instead of .logFC.
-#           -summary.dta: A data.frame containing either symbols or probeset IDs followed by a column or 1s and 0s for each Mating, indicating whether at least one contrast was significant over the timecourse
-#                           after application of any supplied filters.
-
-# Describe this function more
-
-
-contrast.summary.tc <- function(res.list, by=c("symbol", "probe"), ...)
+#           -de.res: data.frame containing the probeset, gene symbol, coeffecients (log2 scale) and whether or not the comparison was significant named as before but with .Signif instead of .logFC.
+#           -summary.dta: A data.frame containing either symbols or probeset IDs followed by a column or 1s and 0s for each Mating, indicating whether at least one contrast was significant over the timecourse after application of any supplied filters.
+de.summary <- function(de_results, by=c("symbol", "probe"), ...)
 {
-  #all rownames should be the same...
   
   by <- match.arg(by)
   
   filt.list <- list(...)
   
-  annot.temp <- select(mogene21sttranscriptcluster.db, keys=rownames(res.list[[1]][[1]]), columns=c("SYMBOL"), keytype="PROBEID")
+  annot.temp <- select(mogene21sttranscriptcluster.db, keys=rownames(de_results[[1]][[1]]), columns=c("SYMBOL"), keytype="PROBEID")
+  
   stopifnot(anyDuplicated(annot.temp$SYMBOL) == 0)
   rownames(annot.temp) <- annot.temp$PROBEID
   
-  cont.res.list <- lapply(res.list, function(x)
+  de_results_v2 <- lapply(de_results, function(x)
   {
     stopifnot(all(rownames(x$coefs) == rownames(x$infecteds)))
     
@@ -155,7 +195,7 @@ contrast.summary.tc <- function(res.list, by=c("symbol", "probe"), ...)
   
   #see if all columns are the same, if not add in the necessary columns with NAs
   
-  cols <- lapply(cont.res.list, colnames)
+  cols <- lapply(de_results_v2, colnames)
   col.lens <- sapply(cols, length)
   col.max <- max(col.lens)
   
@@ -168,15 +208,15 @@ contrast.summary.tc <- function(res.list, by=c("symbol", "probe"), ...)
     for(i in which(col.lens < col.max))
     {
       diff.cols <- setdiff(max.cols, cols[[i]])
-      fill.mat <- matrix(NA, ncol=length(diff.cols), nrow=nrow(cont.res.list[[i]]), dimnames=list(NULL, diff.cols))
+      fill.mat <- matrix(NA, ncol=length(diff.cols), nrow=nrow(de_results_v2[[i]]), dimnames=list(NULL, diff.cols))
       
-      cont.res.list[[i]] <- cbind(cont.res.list[[i]], fill.mat)[,max.cols]
+      de_results_v2[[i]] <- cbind(de_results_v2[[i]], fill.mat)[,max.cols]
     }
   }
   
-  cont.res.list <- cont.res.list[sapply(cont.res.list, nrow) > 0]
+  de_results_v2 <- de_results_v2[sapply(de_results_v2, nrow) > 0]
   
-  cont.summary.dta <- data.frame(do.call("rbind", lapply(1:length(cont.res.list), function(x) cbind(cont.res.list[[x]], Mating=names(cont.res.list)[x]))))
+  cont.summary.dta <- data.frame(do.call("rbind", lapply(1:length(de_results_v2), function(x) cbind(de_results_v2[[x]], Mating=names(de_results_v2)[x]))))
   
   if (length(filt.list) > 0)
   {
@@ -188,80 +228,32 @@ contrast.summary.tc <- function(res.list, by=c("symbol", "probe"), ...)
   
   cont.summary <- dcast(use.form, data=cont.summary.dta, fill=0, value.var="Mating", fun.aggregate=length)
   
-  return(list(de.res=cont.res.list, summary.dta=cont.summary))
+  return(list(de.res=de_results_v2, summary.dta=cont.summary))
 }
 
-
-output_normalized_expression = function(norm.exprs=norm.exprs){
-    
-  # save normalized expression to file
-  norm.exprs_file = exprs(norm.exprs)
+# Differental expression analysis
+# Input:
+  # norm.exprs: normalized expression set
+  # category: Column of phenotype data of expression to that distinguishes the groups to compute differential expression
+  # probe_mapping_file: probe mappings to gene IDs that was saved in the filter features function
+#Output:
+  # DE analysis table: ProbeId (Probe ID from expression set), Symbol (Gene Symbol), category.logFC (Fold change of mean expression between 2 categories), category.Signif (-1=downregulated,1=upregulated,0=not significant), p.value (raw pvalue), category1_mean (mean expression for category 1), category2_mean (mean expression for category 2), p.value.BY (adjusted pvalue), ENTREZID (Entrez ID)
+de_analysis_table = function(norm.exprs, category, probe_mapping_file){
   
-  # insert folder location to save normalized expression
-  reports.dir = "./"
+  # Compute DE analysis
+  de_analysis <- de.analysis(use.exprs=norm.exprs, contrast.correction="separate", category=category)
   
-  # save file
-  print("Saving normalized expression to file...")
+  # Summarize DE results
+  de_results <- de.summary(de_analysis$results)
   
-  write.csv(file=paste(reports.dir,"normalized_expression.csv",sep="/"), x=norm.exprs_file, quote=F)
+  # Save DE table of results with pvalue, adjusted pvalue, and expression means for each group
   
-}
-
-filter_features = function(norm.exprs=norm.exprs){
+  de_results$de.res[[1]] -> de_matrix
   
-  # Map probe IDs to Entrez ID
-  suppressWarnings(probe.ents <- select(mogene21sttranscriptcluster.db, keys=featureNames(norm.exprs), columns=c("ENTREZID"), keytype="PROBEID"))
+  # Add Pvalue
+  rows = sapply(row.names(de_matrix),function(x)which(x==row.names(de_analysis$fit$p.value)))
   
-  # Filter NA
-  use.probe.ents <- probe.ents[!is.na(probe.ents$ENTREZID),]
-  
-  # Remove duplicated mappings
-  sub.eset <- norm.exprs[unique(use.probe.ents$PROBEID),]
-  
-  # Filter low varying expression values
-  unique.probes <- findLargest(featureNames(sub.eset), rowIQRs(sub.eset), 'mogene21sttranscriptcluster.db')
-  
-  # Code chunk to output mapping of entrez to probe used in de analysis if necessary
-  use.probe.ents[as.vector(unlist(sapply(unique.probes, function(x)which(x==use.probe.ents[,1])))),] -> probe_mapping
-  
-  print("Writing probe mapping to file. . .")
-  write.table(file="./probe_mapping.txt",probe_mapping,row.names=F,quote=F,sep="\t")
-  
-  # Filter expression set to include unique probes
-  norm.exprs.filter <- sub.eset[unique.probes,]
-  
-  # return filered data
-  return(norm.exprs.filter)
-}
-
-sample_filter = function(norm.exprs.filter=norm.exprs.filter){
-  # Annotate category to use for DE analysis
-  pData(norm.exprs.filter)$Category = NA
-  
-  pData(norm.exprs.filter)[which(pData(norm.exprs.filter)[,"D4_percent"] <.85),"Category"] <- "Sensitive"
-  
-  pData(norm.exprs.filter)[which(pData(norm.exprs.filter)[,"D4_percent"] >.98),"Category"] <- "Resistant"
-  
-  # Filter expression set to include annotated samples
-  norm.exprs.filter.category <- norm.exprs.filter[, !is.na(norm.exprs.filter$Category)]
-  
-  # return filtered samples
-  return(norm.exprs.filter.category)
-}
-
-de_analysis_table = function(norm.exprs.filter.category=norm.exprs.filter.category, category='Category'){
-  
-  all.res.list <- de.analysis(use.exprs=norm.exprs.filter.category, contrast.correction="separate", category=category)
-  
-  html.res <- contrast.summary.tc(all.res.list$results)
-  
-  # Save DE table of results
-  
-  html.res$de.res[[1]] -> de_matrix
-  
-  rows = sapply(row.names(de_matrix),function(x)which(x==row.names(all.res.list$fit$p.value)))
-  
-  pvalue = all.res.list$fit$p.value
+  pvalue = de_analysis$fit$p.value
   
   pvalue_v2 = as.matrix(pvalue[as.vector(unlist(rows)),])
   
@@ -271,35 +263,37 @@ de_analysis_table = function(norm.exprs.filter.category=norm.exprs.filter.catego
   
   de_table = cbind(de_matrix, pvalue_v2)
   
-  # Order by pvalue
+  # Order by Pvalue
   
   de_table[order(de_table[,"p.value"]),] -> de_table_v2
   
-  # Annotate category in expression file
+  # Annotate category
   
-  sum(colnames(norm.exprs.filter.category) == row.names(pData(norm.exprs.filter.category))) == length(colnames(norm.exprs.filter.category))
+  sum(colnames(norm.exprs) == row.names(pData(norm.exprs))) == length(colnames(norm.exprs))
   
-  colnames(norm.exprs.filter.category) <- paste(colnames(norm.exprs.filter.category),pData(norm.exprs.filter.category)[,category],sep="_")
+  colnames(norm.exprs) <- paste(colnames(norm.exprs),pData(norm.exprs)[,category],sep="_")
   
-  norm_table = exprs(norm.exprs.filter.category)
+  norm_table = exprs(norm.exprs)
   
-  # Add group means  
-  resistant_mean = rowMeans(norm_table[,grep(sapply(strsplit(names(de_table_v2)[3],"\\."),"[",1),colnames(norm_table))])
+  # Add category means  
+  group1 = sapply(strsplit(names(de_table_v2)[3],"\\."),"[",1)
+  group1_mean = rowMeans(norm_table[,grep(group1, colnames(norm_table))])
   
-  sensitive_mean = rowMeans(norm_table[,grep(sapply(strsplit(names(de_table_v2)[3],"\\."),"[",2),colnames(norm_table))])
+  group2 = sapply(strsplit(names(de_table_v2)[3],"\\."),"[",2)
+  group2_mean = rowMeans(norm_table[,grep(group2, colnames(norm_table))])
   
-  de_means = data.frame(resistant_mean, sensitive_mean)
+  de_means = data.frame(group1_mean, group2_mean)
+  colnames(de_means) = c(paste0(group1, '_mean'), paste0(group2, '_mean'))
   
   de_means$ProbeId = row.names(de_means)
   
   merge(de_table_v2, de_means, by="ProbeId",all.x=T) -> de_table_v3
   
-  
   # Add adjusted pvalue
   de_table_v3$p.value.BY = p.adjust(de_table_v3[,"p.value"],method="BY")
   
   # read in probe mapping
-  read.table(file="./probe_mapping.txt",header=T,sep="\t") -> probe_mapping
+  read.table(file=probe_mapping_file, header=T, sep="\t") -> probe_mapping
   
   # Add entrez symbol
   names(probe_mapping)[1] <- "ProbeId"
@@ -307,85 +301,117 @@ de_analysis_table = function(norm.exprs.filter.category=norm.exprs.filter.catego
   merge(de_table_v3, probe_mapping, by="ProbeId",all.x=T) -> de_table_v4
   
   # order by pvalue
-  de_table_v4[order(de_table_v4[,"p.value"]),] -> de_table_v5
+  de_table_v4[order(de_table_v4[,"p.value.BY"]),] -> de_table_v5
   
   # Write table to file
-  print("Saving DE Table to file...")
-  write.table(file="./de_table.txt", x=de_table_v5, sep="\t",quote=F)
+  #print("Saving DE Table to file...")
+  #write.table(file="./de_table.txt", x=de_table_v5, sep="\t",quote=F)
   
   # return DE table
   return(de_table_v5)
 }
 
-# add parameter for top ranking DE genes (pvalue, fc > x, top 100 genes)
-
-
-pathway_analysis = function(norm.exprs.filter.category=norm.exprs.filter.category, de_table=de_table, pvalue_cutoff=0.05){
+# GO enrichment
+# Input: 
+  #norm.exprs: normalized expression set
+  # de_table: differentially expressed gene analysis table
+  # path_pvalue: pvalue cutoff value for significantly enriched pathways
+  # DE_p: consider adjusted or raw pvalue for DE genes to use in pathway analysis
+  # DE_pvalue: DE pvalue cutoff value for significant DE genes
+  # DE_fc: Fold change cutoff value for DE genes (subsets absolute FC changes greater than this value)
+  # top_genes: The number of top genes to analyze path enrichment for (i.e. 10)
+#Output:
+  # Pathway analysis data frame: GOBPID (GO Biological Process ID), Pvalue (raw pvalue), OddsRatio (Odds that the pathway is enriched more than expected), ExpCount (Expected number of genes in path), Count (Number of DE genes in pathway), Size (Number of total genes in path), Term (GO BP full name), GeneRatio (Count/Size), Pvalue.adjusted (BY adjusted pvalue)
+pathway_analysis = function(norm.exprs=norm.exprs.filter.category, de_table=de_table, path_pvalue=0.05, DE_p=c("adjusted","raw"), DE_pvalue=0.05, DE_fc=NULL, top_genes=NULL){
   
   # set universe of genes
-  univ <- select(get('mogene21sttranscriptcluster.db'), keys=featureNames(norm.exprs.filter.category), columns=c("ENTREZID"), keytype="PROBEID")
+  univ <- select(get('mogene21sttranscriptcluster.db'), keys=featureNames(norm.exprs), columns=c("ENTREZID"), keytype="PROBEID")
   
-  # Get list of DE genes, 
-  selectedEntrezIds = as.character(de_table[which(de_table[,4] !=0),"ENTREZID"])
+  # Match DE pvalue type (adjusted or raw)
+  DE_p <- match.arg(DE_p)
   
-  # GO enrichment using hypergeometic distribution
+  DE_p <- switch(DE_p,adjusted = 'p.value.BY', raw = "p.value")
   
-  # Set significant pvalue < 0.05, Over-represented genes in BP = biological processes
+  # subset DE pvalue
+  de_table[which(de_table[,DE_p] < DE_pvalue),] -> de_table_v2
   
-  hgCutoff <- pvalue_cutoff
+  # subset DE FC
+  if(is.null(DE_fc)){
+    de_table_v2 -> de_table_v3
+  }else{
+    de_table_v2[which(abs(de_table_v2[,3]) > DE_fc),] -> de_table_v3
+  }
+  
+  # subset top number of genes if selected, uses all genes by all
+  if(is.null(top_genes)){
+    
+    order(de_table_v3[,DE_p])[1:as.numeric(as.character(top_genes))] -> rows    
+    
+    de_table_v3[rows,] -> de_table_v4
+    
+  }else{
+    de_table_v3 -> de_table_v4
+  }
+  
+  # selected genes for pathway analysis
+  selectedEntrezIds = as.character(de_table_v4[,"ENTREZID"])
+  
+  # GO enrichment using hypergeometic distribution, note: using over-represented genes in BP = biological processes
   params <- new("GOHyperGParams",
                 geneIds=selectedEntrezIds,
                 universeGeneIds=univ,
                 annotation="mogene21sttranscriptcluster.db",
                 ontology="BP",
-                pvalueCutoff=hgCutoff,
+                pvalueCutoff=path_pvalue,
                 conditional=FALSE,
                 testDirection="over")
   
+  # summary of results
   hpOver = hyperGTest(params)
-  
-  #save(hpOver, file=paste0(reports.dir,"/go_results.RData"))
   
   path_results = summary(hpOver)
   
-  #htmlReport(hpOver, file=paste0(reports.dir,"/go_results.html"))
-  
   # Annotate gene ratio
-  generatio = path_results[,"Count"]/path_results[,"Size"]
+  GeneRatio = path_results[,"Count"]/path_results[,"Size"]
   
-  cbind(path_results, generatio) -> path_results_v2
+  cbind(path_results, GeneRatio) -> path_results_v2
   
   # add adjusted pvalue
   path_results_v2$Pvalue.adjusted = p.adjust(path_results_v2[,"Pvalue"],method="BY")
   
   head(path_results_v2)
   
-  print("Saving Pathway Results...")
+  #print("Saving Pathway Results...")
   # Write pathway results to file
-  write.table(file="./go_results.txt", x=path_results_v2, sep="\t",quote=F,row.names=F)
+  #write.table(file="./go_results.txt", x=path_results_v2, sep="\t",quote=F,row.names=F)
   
   return(path_results_v2)
 }
 
-pathway_plots = function(path_results=path_results,parameter=c("OddsRatio","generatio"), pvalue=c('raw','adjusted')){
+# Pathway Visualization
+# Input:
+  # path_results: Pathway analysis data frame
+  # N: Number of pathways to display in plot
+  # parameter: Display OddsRatio or GeneRatio
+  # pvalue: Display adjusted or raw pvalue
+# Output: Pathway Visualization
+pathway_plots = function(path_results=path_results, N=10, parameter=c("OddsRatio","GeneRatio"), pvalue=c('adjusted','raw')){
   
-  parameter <- match.arg(parameter,choices=c("OddsRatio","generatio"))
+  parameter <- match.arg(parameter, choices=c("OddsRatio","GeneRatio"))
   #print(parameter)
-
-  pvalue <- match.arg(pvalue,choices=c('raw','adjusted'))
-
-  # subset top 10
-  res_table_v2 = path_results[1:10,]
-
-  res_table_v2[order(res_table_v2[,parameter]),] -> res_table_v3
   
-  if(pvalue == 'raw'){
-    p = ggplot(res_table_v3, aes(res_table_v3[,parameter], reorder(res_table_v3$Term,res_table_v3[,parameter])))
-    p + geom_point(aes(size = Count, colour = res_table_v3$Pvalue)) + scale_colour_gradient(low = "red", high="blue") + labs(y='',x=as.character(parameter))   
-  }else{
-    p = ggplot(res_table_v3, aes(res_table_v3[,parameter], reorder(res_table_v3$Term,res_table_v3[,parameter])))
-    p + geom_point(aes(size = Count, colour = res_table_v3$Pvalue.adjusted)) + scale_colour_gradient(low = "red", high="blue") + labs(y='',x=as.character(parameter))
+  pvalue <- match.arg(pvalue,choices=c('raw', 'adjusted'))
+  
+  # subset top 10
+  res_table_v2 = path_results[1:N, ]
+  
+  res_table_v3 = res_table_v2[order(res_table_v2[, parameter]),]
+  
+  if (pvalue == 'raw') {
+    p = ggplot(res_table_v3, aes_string(parameter, 'Term'))
+    p + geom_point(aes(size = Count, colour = Pvalue)) + scale_colour_gradient(low = "red", high="blue") + labs(y='', x=as.character(parameter))   
+  } else {
+    p = ggplot(res_table_v3, aes_string(parameter, 'Term'))
+    p + geom_point(aes(size = Count, colour = Pvalue.adjusted)) + scale_colour_gradient(low = "red", high="blue") + labs(y='', x=as.character(parameter))
   }
 }
-
-
