@@ -28,6 +28,8 @@ dim(raw.exprs.filter)
 ## Normalize the data
 norm.exprs.filter = rma(raw.exprs.filter, normalize=TRUE, target="core")
 
+dim(norm.exprs.filter)
+
 # Save normalized expression as .csv file (optional)
 output_normalized_expression(norm.exprs=norm.exprs.filter, save.dir=data_dir)
 
@@ -40,7 +42,7 @@ dim(norm.exprs.filter)
 # Compute DE analysis and save table of results
 de_table = de_analysis_table(norm.exprs=norm.exprs.filter, category='Category', probe_mapping_file='probe_mapping.txt')
 
-head(de_table)
+#write.table(file="./de_table.txt", x=de_table, sep="\t",quote=F)
 
 # GO stats enrichment analysis of DE genes
 path_results = pathway_analysis(norm.exprs=norm.exprs.filter, de_table=de_table, path_pvalue=0.05, DE_p="adjusted", DE_pvalue=0.05, DE_fc=NULL, top_genes=10)
