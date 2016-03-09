@@ -130,14 +130,10 @@ de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file
   fit.2 <- eBayes(fit.2)
   
   unique.matings <- unique(contrasts)
+    
+  p.value.BY = p.adjust(fit.2$p.value, method="BY")
   
-  head(fit.2$p.value)
-  
-  head(fit.2$F.p.value)
-  
-  head(decideTests(fit.2, method='separate'))
-  
-  de_results <- list(infecteds=decideTests(fit.2, method='separate'), coefs=fit.2$coefficients)
+  de_results <- list(infecteds=decideTests(fit.2, method='separate', adjust.method='BY'), coefs=fit.2$coefficients)
   
   de_results <- list(de_results)
   
@@ -157,12 +153,10 @@ de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file
 
   colnames(coef.mat) <- paste(gsub("M\\d+[xX]\\d+\\.", "", colnames(coef.mat)), "logFC", sep=" ")
   colnames(sig.mat) <- paste(gsub("M\\d+[xX]\\d+\\.", "", colnames(sig.mat)), "Signif", sep=" ")
-    
-  pvalue = fit.2$p.value
   
   stopifnot(all(row.names(pvalue) == rownames(coef.mat)))
   
-  de_table <- data.frame(ProbeId=rownames(coef.mat), Symbol=annot.temp[rownames(coef.mat),"SYMBOL"], coef.mat, sig.mat, pvalue,stringsAsFactors=F)
+  de_table <- data.frame(ProbeId=rownames(coef.mat), Symbol=annot.temp[rownames(coef.mat),"SYMBOL"], coef.mat, sig.mat, p.value.BY,stringsAsFactors=F)
   
   # add t.test pvalue and t.test adjusted pvalue
   # merge(t(new_exp),pData(raw.exprs.filter)[,c("ID","Category")],by="ID") -> new_exp_v2
@@ -181,10 +175,8 @@ de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file
   # 
   # summary(de_table_v2[which(de_table_v2[,4] !=0),'ttest.p.value'])
          
-  names(de_table)[5] <- "p.value"
-
   # Order by Pvalue  
-  de_table[order(de_table[,"p.value"]),] -> de_table_v2
+  de_table[order(de_table[,"p.value.BY"]),] -> de_table_v2
   
   # Annotate category
   
@@ -211,7 +203,7 @@ de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file
 
   
   # Add adjusted pvalue
-  de_table_v3$p.value.BY = p.adjust(de_table_v3[,"p.value"],method="BY")
+  #de_table_v3$p.value.BY = p.adjust(de_table_v3[,"p.value"],method="BY")
   
   # read in probe mapping
   read.table(file=probe_mapping_file, header=T, sep="\t") -> probe_mapping
