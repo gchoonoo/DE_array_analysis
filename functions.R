@@ -5,7 +5,6 @@
 ##########################################################
 
 # setwd("/Users/choonoo/DE_array_analysis")
-
 # source("http://bioconductor.org/biocLite.R")
 
 #biocLite('BiocInstaller')
@@ -92,29 +91,24 @@ filter_features = function(norm.exprs=norm.exprs, save.dir='.'){
   return(norm.exprs.filter)
 }
 
-#Computes differential expression between 2 specified categories
-#Input:
-#       use.exprs: normalized expression
-#       contrast.correction: How to correct for multiple testing should be a valid value to provide to the limma::decideTests function
-#       category: column of pData to use for de analysis between categories        
+# Differental expression analysis
+
+# Input:
+# norm.exprs: normalized expression set
+# category: Column of phenotype data of expression to that distinguishes the groups to compute differential expression
+# probe_mapping_file: probe mappings to gene IDs that was saved in the filter features function
+
 #Output:
-#       A list containing the following elements:
-#           -results: A list containing the following elements named by Mating:
-#               1) coefs: The contrast coefficients
-#               2) infecteds: The matrix of 0,1 and -1's formed from running limma::decideTests with method=contrast.correction
-#           -fit: The MArrayLM object from limma.
-#           -cont.counts: The number of samples for the two parts of each formed contrast or NA if the samples were not available
+# DE analysis table: ProbeId (Probe ID from expression set), Symbol (Gene Symbol), category.logFC (Fold change of mean expression between 2 categories), category.Signif (-1=downregulated,1=upregulated,0=not significant), p.value (raw pvalue), category1_mean (mean expression for category 1), category2_mean (mean expression for category 2), p.value.BY (adjusted pvalue), ENTREZID (Entrez ID)
 
-# add timepoint contrasts within this function
-
-de.analysis <- function(use.exprs, contrast.correction="separate", category="Category")
+de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file)
 {
   
-  exprs.dta <- pData(use.exprs)
+  exprs.dta <- pData(norm.exprs)
   
-  category = pData(use.exprs)[,names(pData(use.exprs)) == category]
+  category_factor = pData(norm.exprs)[,names(pData(norm.exprs)) == category]
   
-  contrasts <- with(exprs.dta, paste(category, sep="."))
+  contrasts <- with(exprs.dta, paste(category_factor, sep="."))
   
   cont.counts = mapply(function(x,y) return(c(x,y)), as.numeric(table(contrasts)[names(summary(as.factor(contrasts)))[2]]), as.numeric(table(contrasts)[names(summary(as.factor(contrasts)))[1]]), SIMPLIFY=F)
   
@@ -127,7 +121,7 @@ de.analysis <- function(use.exprs, contrast.correction="separate", category="Cat
   
   colnames(mod) <- sub("contrasts", "", colnames(mod)) 
   
-  fit.1 <- lmFit(use.exprs, mod)
+  fit.1 <- lmFit(norm.exprs, mod)
   
   conts <- makeContrasts(contrasts=mouse.conts, levels=mod)
   
@@ -137,134 +131,59 @@ de.analysis <- function(use.exprs, contrast.correction="separate", category="Cat
   
   unique.matings <- unique(contrasts)
   
-  de_results <- list(infecteds=decideTests(fit.2, method=contrast.correction), coefs=fit.2$coefficients)
+  head(fit.2$p.value)
+  
+  head(fit.2$F.p.value)
+  
+  head(decideTests(fit.2, method='separate'))
+  
+  de_results <- list(infecteds=decideTests(fit.2, method='separate'), coefs=fit.2$coefficients)
   
   de_results <- list(de_results)
   
   names(de_results) <- colnames(fit.2$coefficients)
-  
-  #null.list <- sapply(de_results, is.null)
-  
-  return(list(results=de_results, fit=fit.2, cont.counts=cont.counts))
-}
-
-#Summarizes DE results
-#Input:
-#       de_results: Results from the de.analysis function
-#       by: summarize with gene symbols or probeset IDs.
-#Output:
-#       A list containing the following elements:
-#           -de.res: data.frame containing the probeset, gene symbol, coeffecients (log2 scale) and whether or not the comparison was significant named as before but with .Signif instead of .logFC.
-#           -summary.dta: A data.frame containing either symbols or probeset IDs followed by a column or 1s and 0s for each Mating, indicating whether at least one contrast was significant over the timecourse after application of any supplied filters.
-de.summary <- function(de_results, by=c("symbol", "probe"), ...)
-{
-  
-  by <- match.arg(by)
-  
-  filt.list <- list(...)
-  
-  annot.temp <- select(mogene21sttranscriptcluster.db, keys=rownames(de_results[[1]][[1]]), columns=c("SYMBOL"), keytype="PROBEID")
+    
+  by <- "symbol"
+   
+  annot.temp <- select(mogene21sttranscriptcluster.db, keys=row.names(de_results[[1]][[1]]), columns=c("SYMBOL"), keytype="PROBEID")
   
   stopifnot(anyDuplicated(annot.temp$SYMBOL) == 0)
   rownames(annot.temp) <- annot.temp$PROBEID
   
-  de_results_v2 <- lapply(de_results, function(x)
-  {
-    stopifnot(all(rownames(x$coefs) == rownames(x$infecteds)))
-    
-    coef.mat <- x$coefs
-    sig.mat <- x$infecteds
-    
-    #any.sig <- apply(sig.mat, 1, function(x) any(x != 0))
-    
-    #any.sig <- apply(sig.mat, 1, function(x) any(x != 0))
-    
-    colnames(coef.mat) <- paste(gsub("M\\d+[xX]\\d+\\.", "", colnames(coef.mat)), "logFC", sep=" ")
-    colnames(sig.mat) <- paste(gsub("M\\d+[xX]\\d+\\.", "", colnames(sig.mat)), "Signif", sep=" ")
-    
-    temp.mat <- data.frame(ProbeId=rownames(coef.mat), Symbol=annot.temp[rownames(coef.mat),"SYMBOL"], coef.mat, sig.mat, stringsAsFactors=F)
-    
-    for(i in names(filt.list))
-    {
-      temp.mat <- cbind(temp.mat, as.integer(filt.list[[i]][rownames(temp.mat)]))
-      names(temp.mat)[ncol(temp.mat)] <- i
-    }
-    
-    return(temp.mat)
-  })
-  
-  #see if all columns are the same, if not add in the necessary columns with NAs
-  
-  cols <- lapply(de_results_v2, colnames)
-  col.lens <- sapply(cols, length)
-  col.max <- max(col.lens)
-  
-  exp.cols <- unique(unlist(cols))
-  
-  if (any(col.lens < col.max))
-  {
-    max.cols <- cols[[which.max(col.lens)]]
-    
-    for(i in which(col.lens < col.max))
-    {
-      diff.cols <- setdiff(max.cols, cols[[i]])
-      fill.mat <- matrix(NA, ncol=length(diff.cols), nrow=nrow(de_results_v2[[i]]), dimnames=list(NULL, diff.cols))
-      
-      de_results_v2[[i]] <- cbind(de_results_v2[[i]], fill.mat)[,max.cols]
-    }
-  }
-  
-  de_results_v2 <- de_results_v2[sapply(de_results_v2, nrow) > 0]
-  
-  cont.summary.dta <- data.frame(do.call("rbind", lapply(1:length(de_results_v2), function(x) cbind(de_results_v2[[x]], Mating=names(de_results_v2)[x]))))
-  
-  if (length(filt.list) > 0)
-  {
-    filt.mat <- apply(do.call("cbind", filt.list), 1, function(x) all(x == F))
-    cont.summary.dta <- cont.summary.dta[cont.summary.dta$ProbeId %in% names(filt.mat)[filt.mat],]
-  }
-  
-  use.form <- formula(paste0(switch(by, probe="ProbeId", symbol="Symbol"), "~Mating"))
-  
-  cont.summary <- dcast(use.form, data=cont.summary.dta, fill=0, value.var="Mating", fun.aggregate=length)
-  
-  return(list(de.res=de_results_v2, summary.dta=cont.summary))
-}
+  stopifnot(all(row.names(de_results$coefs) == row.names(de_results$infecteds)))
+   
+  coef.mat <- de_results[[1]]$coefs
+  sig.mat <- de_results[[1]]$infecteds
 
-# Differental expression analysis
-# Input:
-  # norm.exprs: normalized expression set
-  # category: Column of phenotype data of expression to that distinguishes the groups to compute differential expression
-  # probe_mapping_file: probe mappings to gene IDs that was saved in the filter features function
-#Output:
-  # DE analysis table: ProbeId (Probe ID from expression set), Symbol (Gene Symbol), category.logFC (Fold change of mean expression between 2 categories), category.Signif (-1=downregulated,1=upregulated,0=not significant), p.value (raw pvalue), category1_mean (mean expression for category 1), category2_mean (mean expression for category 2), p.value.BY (adjusted pvalue), ENTREZID (Entrez ID)
-de_analysis_table = function(norm.exprs, category, probe_mapping_file){
+  colnames(coef.mat) <- paste(gsub("M\\d+[xX]\\d+\\.", "", colnames(coef.mat)), "logFC", sep=" ")
+  colnames(sig.mat) <- paste(gsub("M\\d+[xX]\\d+\\.", "", colnames(sig.mat)), "Signif", sep=" ")
+    
+  pvalue = fit.2$p.value
   
-  # Compute DE analysis
-  de_analysis <- de.analysis(use.exprs=norm.exprs, contrast.correction="separate", category=category)
+  stopifnot(all(row.names(pvalue) == rownames(coef.mat)))
   
-  # Summarize DE results
-  de_results <- de.summary(de_analysis$results)
+  de_table <- data.frame(ProbeId=rownames(coef.mat), Symbol=annot.temp[rownames(coef.mat),"SYMBOL"], coef.mat, sig.mat, pvalue,stringsAsFactors=F)
   
-  # Save DE table of results with pvalue, adjusted pvalue, and expression means for each group
-  
-  de_results$de.res[[1]] -> de_matrix
-  
-  # Add Pvalue
-  rows = sapply(row.names(de_matrix),function(x)which(x==row.names(de_analysis$fit$p.value)))
-  
-  pvalue = de_analysis$fit$p.value
-  
-  pvalue_v2 = as.matrix(pvalue[as.vector(unlist(rows)),])
-  
-  colnames(pvalue_v2) = "p.value"
-  
-  sum(row.names(de_matrix) == row.names(pvalue_v2))
-  
-  de_table = cbind(de_matrix, pvalue_v2)
-  
-  # Order by Pvalue
-  
+  # add t.test pvalue and t.test adjusted pvalue
+  # merge(t(new_exp),pData(raw.exprs.filter)[,c("ID","Category")],by="ID") -> new_exp_v2
+  # 
+  # colnames(new_exp) <- paste(pData(raw.exprs.filter)[,c("ID")],pData(raw.exprs.filter)[,c("Category")],sep="_")
+  # 
+  # ttest.p.value = sapply(1:dim(new_exp)[1],function(x)t.test(new_exp[x,grep("Sensitive",colnames(new_exp))],new_exp[x,grep("Resistant",colnames(new_exp))])$p.value)
+  # 
+  # ttest.p.value.BY = sapply(1:dim(new_exp)[1],function(x)pairwise.t.test(new_exp[x,],pData(raw.exprs.filter)[,c("Category")],"BY")$p.value)
+  # 
+  # data.frame(ProbeId=row.names(new_exp), ttest.p.value, ttest.p.value.BY) -> ttest.p.value_v2
+  # 
+  # merge(de_table, ttest.p.value_v2,by="ProbeId") -> de_table_v2 
+  # 
+  # de_table_v2[which(de_table_v2[,2] == "Kars"),]
+  # 
+  # summary(de_table_v2[which(de_table_v2[,4] !=0),'ttest.p.value'])
+         
+  names(de_table)[5] <- "p.value"
+
+  # Order by Pvalue  
   de_table[order(de_table[,"p.value"]),] -> de_table_v2
   
   # Annotate category
@@ -274,6 +193,7 @@ de_analysis_table = function(norm.exprs, category, probe_mapping_file){
   colnames(norm.exprs) <- paste(colnames(norm.exprs),pData(norm.exprs)[,category],sep="_")
   
   norm_table = exprs(norm.exprs)
+
   
   # Add category means  
   group1 = sapply(strsplit(names(de_table_v2)[3],"\\."),"[",1)
@@ -288,6 +208,7 @@ de_analysis_table = function(norm.exprs, category, probe_mapping_file){
   de_means$ProbeId = row.names(de_means)
   
   merge(de_table_v2, de_means, by="ProbeId",all.x=T) -> de_table_v3
+
   
   # Add adjusted pvalue
   de_table_v3$p.value.BY = p.adjust(de_table_v3[,"p.value"],method="BY")
@@ -302,6 +223,7 @@ de_analysis_table = function(norm.exprs, category, probe_mapping_file){
   
   # order by pvalue
   de_table_v4[order(de_table_v4[,"p.value.BY"]),] -> de_table_v5
+  
   
   # Write table to file
   #print("Saving DE Table to file...")
