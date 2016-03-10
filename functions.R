@@ -97,12 +97,15 @@ filter_features = function(norm.exprs=norm.exprs, save.dir='.'){
 # norm.exprs: normalized expression set
 # category: Column of phenotype data of expression to that distinguishes the groups to compute differential expression
 # probe_mapping_file: probe mappings to gene IDs that was saved in the filter features function
+# correction: BY or BH pvalue correction method as specified in p.adjust function {stats}, BH=Benjamini&Hochberg, BY=Benjamini&Yekutieli (default=BY)
 
 #Output:
-# DE analysis table: ProbeId (Probe ID from expression set), Symbol (Gene Symbol), category.logFC (Fold change of mean expression between 2 categories), category.Signif (-1=downregulated,1=upregulated,0=not significant), p.value (raw pvalue), category1_mean (mean expression for category 1), category2_mean (mean expression for category 2), p.value.BY (adjusted pvalue), ENTREZID (Entrez ID)
+# DE analysis table: ProbeId (Probe ID from expression set), Symbol (Gene Symbol), category.logFC (Fold change of mean expression between 2 categories), category.Signif (-1=downregulated,1=upregulated,0=not significant), p.value (raw pvalue), category1_mean (mean expression for category 1), category2_mean (mean expression for category 2), p.value.adj (adjusted pvalue), raw p.value, ENTREZID (Entrez ID)
 
-de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file)
+de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file,correction=c("BY","BH"))
 {
+  
+  correction <- switch(correction, BY="BY", BH="BH")
   
   exprs.dta <- pData(norm.exprs)
   
@@ -130,10 +133,12 @@ de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file
   fit.2 <- eBayes(fit.2)
   
   unique.matings <- unique(contrasts)
-    
-  p.value.BY = p.adjust(fit.2$p.value, method="BY")
   
-  de_results <- list(infecteds=decideTests(fit.2, method='separate', adjust.method='BY'), coefs=fit.2$coefficients)
+  p.value = fit.2$p.value
+  
+  p.value.adj = p.adjust(fit.2$p.value, method=correction)
+  
+  de_results <- list(infecteds=decideTests(fit.2, method='separate', adjust.method=correction), coefs=fit.2$coefficients)
   
   de_results <- list(de_results)
   
@@ -156,7 +161,7 @@ de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file
   
   stopifnot(all(row.names(pvalue) == rownames(coef.mat)))
   
-  de_table <- data.frame(ProbeId=rownames(coef.mat), Symbol=annot.temp[rownames(coef.mat),"SYMBOL"], coef.mat, sig.mat, p.value.BY,stringsAsFactors=F)
+  de_table <- data.frame(ProbeId=rownames(coef.mat), Symbol=annot.temp[rownames(coef.mat),"SYMBOL"], coef.mat, sig.mat, p.value.adj,p.value=p.value[,1], stringsAsFactors=F)
   
   # add t.test pvalue and t.test adjusted pvalue
   # merge(t(new_exp),pData(raw.exprs.filter)[,c("ID","Category")],by="ID") -> new_exp_v2
@@ -176,7 +181,7 @@ de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file
   # summary(de_table_v2[which(de_table_v2[,4] !=0),'ttest.p.value'])
          
   # Order by Pvalue  
-  de_table[order(de_table[,"p.value.BY"]),] -> de_table_v2
+  de_table[order(de_table[,'p.value.adj']),] -> de_table_v2
   
   # Annotate category
   
@@ -214,7 +219,7 @@ de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file
   merge(de_table_v3, probe_mapping, by="ProbeId",all.x=T) -> de_table_v4
   
   # order by pvalue
-  de_table_v4[order(de_table_v4[,"p.value.BY"]),] -> de_table_v5
+  de_table_v4[order(de_table_v4[,"p.value.adj"]),] -> de_table_v5
   
   
   # Write table to file
@@ -236,7 +241,7 @@ de_analysis_table <- function(norm.exprs, category="Category",probe_mapping_file
   # top_genes: The number of top genes to analyze path enrichment for (i.e. 10)
 #Output:
   # Pathway analysis data frame: GOBPID (GO Biological Process ID), Pvalue (raw pvalue), OddsRatio (Odds that the pathway is enriched more than expected), ExpCount (Expected number of genes in path), Count (Number of DE genes in pathway), Size (Number of total genes in path), Term (GO BP full name), GeneRatio (Count/Size), Pvalue.adjusted (BY adjusted pvalue)
-pathway_analysis = function(norm.exprs=norm.exprs.filter.category, de_table=de_table, path_pvalue=0.05, DE_p=c("adjusted","raw"), DE_pvalue=0.05, DE_fc=NULL, top_genes=NULL){
+pathway_analysis = function(norm.exprs=norm.exprs.filter.category, de_table=de_table, path_pvalue=0.05, correction = c("BY","BH"), DE_p=c("adjusted","raw"), DE_pvalue=0.05, DE_fc=NULL, top_genes=NULL){
   
   # set universe of genes
   univ <- select(get('mogene21sttranscriptcluster.db'), keys=featureNames(norm.exprs), columns=c("ENTREZID"), keytype="PROBEID")
@@ -244,7 +249,7 @@ pathway_analysis = function(norm.exprs=norm.exprs.filter.category, de_table=de_t
   # Match DE pvalue type (adjusted or raw)
   DE_p <- match.arg(DE_p)
   
-  DE_p <- switch(DE_p,adjusted = 'p.value.BY', raw = "p.value")
+  DE_p <- switch(DE_p,adjusted = 'p.value.adj', raw = "p.value")
   
   # subset DE pvalue
   de_table[which(de_table[,DE_p] < DE_pvalue),] -> de_table_v2
@@ -290,8 +295,10 @@ pathway_analysis = function(norm.exprs=norm.exprs.filter.category, de_table=de_t
   
   cbind(path_results, GeneRatio) -> path_results_v2
   
+  correction <- switch(correction, BY = 'BY', BH = "BH")
+
   # add adjusted pvalue
-  path_results_v2$Pvalue.adjusted = p.adjust(path_results_v2[,"Pvalue"],method="BY")
+  path_results_v2$Pvalue.adjusted = p.adjust(path_results_v2[,"Pvalue"], method=correction)
   
   head(path_results_v2)
   
