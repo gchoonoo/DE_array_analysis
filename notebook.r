@@ -1,15 +1,15 @@
-
 ## Load libraries and functions for DE and pathway analysis
 source('functions.R')
 
-# save.image("~/DE_array_analysis/de_analysis_v2.RData")
+# save.image("~/DE_array_analysis/de_analysis.RData")
 
-# load("~/DE_array_analysis/de_analysis_v2.RData")
+# load("~/DE_array_analysis/de_analysis.RData")
 
 ## Set data directory and load raw expression data
 ## You will have to change the file name and paths
 data_dir = '.'
-raw_exprs_file = 'de_test_v2.RData'
+raw_exprs_file = 'raw_exp.RData'
+
 ## This will load the raw.exprs object 
 load(file.path(data_dir, raw_exprs_file))
 
@@ -40,12 +40,12 @@ norm.exprs.filter = filter_features(norm.exprs=norm.exprs.filter, save.dir=getwd
 dim(norm.exprs.filter)
 
 # Compute DE analysis and save table of results
-de_table = de_analysis_table(norm.exprs=norm.exprs.filter, category='Category', probe_mapping_file='probe_mapping.txt')
+de_table = de_analysis_table(norm.exprs=norm.exprs.filter, category='Category', probe_mapping_file='probe_mapping.txt', correction="BY")
 
 #write.table(file="./de_table.txt", x=de_table, sep="\t",quote=F)
 
 # GO stats enrichment analysis of DE genes
-path_results = pathway_analysis(norm.exprs=norm.exprs.filter, de_table=de_table, path_pvalue=0.05, DE_p="adjusted", DE_pvalue=0.05, DE_fc=NULL, top_genes=10)
+path_results = pathway_analysis(norm.exprs=norm.exprs.filter, de_table=de_table, path_pvalue=0.05, correction="BY", DE_p="adjusted", DE_pvalue=0.05, DE_fc=NULL, top_genes=10)
 
 head(path_results)
 
